@@ -28,7 +28,7 @@ v0.03   2024-05-04   Code finds picurl and number of sites automatically
 v0.04   2024-05-05   fixed urlbasepath and only download when file not exists or is corrupt
 v0.05   2024-05-05   working async download WITHOUT limit asyncio.Semaphore()
 v0.06   2024-05-06   limit parallel downloads
-
+testing github actions
 """
 """----------------------------------------------------------------------------
         |||||        |||||
