@@ -35,9 +35,9 @@ testing github actions
         vvvvv CONFIG vvvvv
 -------------------------------------------------------------------------------
 """
-URL = 'https://hilary-swank.com/gallery/thumbnails.php?album=1505'
+URL = 'https://www.sarah-michelle-gellar.org/photos/thumbnails.php?album=1800'
 #dest = 'C:\\Users\\silence\\Desktop\\ja\\2014\\Jessica Alba - Samsung Hope For Children Gala in NYC 2014-06-10\\'
-dest = 'C:\\Users\\silence\\Desktop\\Hilary Swank Test\\'
+dest = 'C:\\Users\\silence\\Desktop\\smg\\2023\\Sarah Michelle Gellar - American Riviera Award Annual Santa Barbara International Film Festival 2023-02-14\\'
 picprefix = ''
 nbrOfParallelDL = 5
 
@@ -169,9 +169,11 @@ if website.status_code == 200:
     else:
         getImageUrlfromSite(URL + "&page=" + str(1))
     print("%s files found" % len(filelist))
-
-    if not os.path.exists(dest):
-        os.makedirs(dest)
+    try:
+        if not os.path.exists(dest):
+            os.makedirs(dest)
+    except:
+        print("ERROR: Cannot create directory %s" % dest)
 
     sem = asyncio.Semaphore(nbrOfParallelDL)
 
