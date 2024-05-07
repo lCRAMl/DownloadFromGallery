@@ -35,9 +35,9 @@ testing github actions
         vvvvv CONFIG vvvvv
 -------------------------------------------------------------------------------
 """
-URL = 'https://www.sarah-michelle-gellar.org/photos/thumbnails.php?album=1800'
+URL = 'https://anadearmas.net/photos/thumbnails.php?album=1803'
 #dest = 'C:\\Users\\silence\\Desktop\\ja\\2014\\Jessica Alba - Samsung Hope For Children Gala in NYC 2014-06-10\\'
-dest = 'C:\\Users\\silence\\Desktop\\smg\\2023\\Sarah Michelle Gellar - American Riviera Award Annual Santa Barbara International Film Festival 2023-02-14\\'
+dest = 'C:\\Users\\silence\\Desktop\\Ana de Armas\\2022\\Ana de Armas - The Gray Man Screening in London 2022-07-19\\'
 picprefix = ''
 nbrOfParallelDL = 5
 
@@ -161,10 +161,16 @@ filelist = []
 website = requests.get(URL, headers)
 
 if website.status_code == 200:
-    results = BeautifulSoup(website.content, 'html.parser')
-    countsites = results.find_all('td', class_='navmenu')
-    if (countsites):
-        for i in range(1, len(countsites)):
+    soup = BeautifulSoup(website.content, 'html.parser')
+    counttd = soup.find_all('td', class_='navmenu')
+    data = []
+    for sites in counttd:
+        number = sites.find_all(['a'])
+        number = [ele.text.strip() for ele in number]
+        data.append([int(ele) for ele in number if ele])
+    sites = max(data)[0]
+    if (sites):
+        for i in range(1, sites):
             getImageUrlfromSite(URL + "&page=" + str(i))
     else:
         getImageUrlfromSite(URL + "&page=" + str(1))
