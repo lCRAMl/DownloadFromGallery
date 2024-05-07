@@ -169,8 +169,9 @@ if website.status_code == 200:
         number = [ele.text.strip() for ele in number]
         data.append([int(ele) for ele in number if ele])
     sites = max(data)[0]
+    print(sites)
     if (sites):
-        for i in range(1, sites):
+        for i in range(1, sites+1):
             getImageUrlfromSite(URL + "&page=" + str(i))
     else:
         getImageUrlfromSite(URL + "&page=" + str(1))
