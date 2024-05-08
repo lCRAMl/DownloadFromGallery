@@ -35,9 +35,9 @@ testing github actions
         vvvvv CONFIG vvvvv
 -------------------------------------------------------------------------------
 """
-URL = 'https://anadearmas.net/photos/thumbnails.php?album=1803'
+URL = 'https://anadearmas.net/photos/thumbnails.php?album=1579'
 #dest = 'C:\\Users\\silence\\Desktop\\ja\\2014\\Jessica Alba - Samsung Hope For Children Gala in NYC 2014-06-10\\'
-dest = 'C:\\Users\\silence\\Desktop\\Ana de Armas\\2022\\Ana de Armas - The Gray Man Screening in London 2022-07-19\\'
+dest = 'C:\\Users\\silence\\Desktop\\Ana de Armas\\2021\\Ana de Armas - No Time To Die Premiere in London 2021-09-28\\'
 picprefix = ''
 nbrOfParallelDL = 5
 
@@ -84,12 +84,21 @@ headers = {
     # 'TE': 'trailers',
 }
 
+filelist = []
+
 def verify_image(img_file):
     try:
         io.imread(img_file)
         return True
     except Exception:
         return False
+    
+def createdirectory(dest):
+    try:
+        if not os.path.exists(dest):
+            os.makedirs(dest)
+    except:
+        print("ERROR: Cannot create directory %s" % dest)
 
 async def download(dirtyimagepath: str, destination: str, prefix: str):
     
@@ -132,12 +141,12 @@ async def download(dirtyimagepath: str, destination: str, prefix: str):
                     print(imagepath + ' Response:' + str(r.status_code))
 
 def getImageUrlfromSite(siteURL: str):
-    website = requests.get(siteURL, headers={"User-Agent": "XY"})
+    #website = requests.get(siteURL, headers={"User-Agent": "XY"})
+    website = requests.get(siteURL, headers)
     results = BeautifulSoup(website.content, 'html.parser')
     images = results.find_all('td', class_='thumbnails')
     #urlbasepath = urlparse(siteURL).netloc
     urlbasepath = siteURL.rsplit('/', 1)[0]
-    print("Searching Images on: " + siteURL + " " + str(len(images)) + " files found.")
     
     for image in images:
         try:
@@ -148,54 +157,59 @@ def getImageUrlfromSite(siteURL: str):
             filelist.append(picturepath) if picturepath not in filelist else filelist     # nur hinzufügen, wenn noch nicht drin
         except:
             pass
+    print("Searching Images on: " + siteURL + " " + str(len(filelist)) + " files found.")
+
+def countnumberofsites(siteURL):
+    #website = requests.get(URL, headers={"User-Agent": "XY"})
+    website = requests.get(siteURL, headers)
+
+    if website.status_code == 200:
+        soup = BeautifulSoup(website.content, 'html.parser')
+        counttd = soup.find_all('td', class_='navmenu')
+        data = []
+        for sites in counttd:
+            number = sites.find_all(['a'])
+            number = [ele.text.strip() for ele in number]
+            data.append([int(ele) for ele in number if ele])
+        print(data)
+        try:
+            sites = max(data)[0]
+        except:
+            sites = 0
+        return sites
+    else:
+        print("ERROR: bad answer from Website: " + website.status_code)
+
+
 
 async def main():
 
     tasks = [asyncio.ensure_future(safe_download(file, dest, picprefix)) for file in filelist]
     await asyncio.gather(*tasks, return_exceptions=True)  # await moment all downloads done
 
+sites = countnumberofsites(URL)    
 
-filelist = []
-
-#website = requests.get(URL, headers={"User-Agent": "XY"})
-website = requests.get(URL, headers)
-
-if website.status_code == 200:
-    soup = BeautifulSoup(website.content, 'html.parser')
-    counttd = soup.find_all('td', class_='navmenu')
-    data = []
-    for sites in counttd:
-        number = sites.find_all(['a'])
-        number = [ele.text.strip() for ele in number]
-        data.append([int(ele) for ele in number if ele])
-    sites = max(data)[0]
-    
-    if (sites):
-        for i in range(1, sites+1):
-            getImageUrlfromSite(URL + "&page=" + str(i))
-    else:
-        getImageUrlfromSite(URL + "&page=" + str(1))
-    print("%s files found" % len(filelist))
-    try:
-        if not os.path.exists(dest):
-            os.makedirs(dest)
-    except:
-        print("ERROR: Cannot create directory %s" % dest)
-
-    sem = asyncio.Semaphore(nbrOfParallelDL)
-
-    async def safe_download(file, dest, picprefix):
-        async with sem:  # semaphore limits num of simultaneous downloads
-            return await download(file, dest, picprefix)
-
-
-    if __name__ ==  '__main__':
-        loop = asyncio.get_event_loop()
-        try:
-            loop.run_until_complete(main())
-        finally:
-            loop.run_until_complete(loop.shutdown_asyncgens())
-            loop.close()
-
+if (sites):
+    for i in range(1, sites+1):
+        getImageUrlfromSite(URL + "&page=" + str(i))
 else:
-    print("ERROR: bad answer from Website: " + website.status_code)
+    getImageUrlfromSite(URL + "&page=1")
+print("%s files found" % len(filelist))
+
+createdirectory(dest)
+
+sem = asyncio.Semaphore(nbrOfParallelDL)
+
+async def safe_download(file, dest, picprefix):
+    async with sem:  # semaphore limits num of simultaneous downloads
+        return await download(file, dest, picprefix)
+
+
+if __name__ ==  '__main__':
+    loop = asyncio.get_event_loop()
+    try:
+        loop.run_until_complete(main())
+    finally:
+        loop.run_until_complete(loop.shutdown_asyncgens())
+        loop.close()
+
