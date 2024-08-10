@@ -29,6 +29,7 @@ v0.04   2024-05-05   fixed urlbasepath and only download when file not exists or
 v0.05   2024-05-05   working async download WITHOUT limit asyncio.Semaphore()
 v0.06   2024-05-06   limit parallel downloads
 testing github actions
+v0.07   2024-08-10   checking if site index can be converted to int
 """
 """----------------------------------------------------------------------------
         |||||        |||||
