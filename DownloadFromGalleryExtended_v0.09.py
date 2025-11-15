@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""
+r"""
           _____                    _____                    _____                    _____          
          /\    \                  /\    \                  /\    \                  /\    \         
         /::\    \                /::\    \                /::\    \                /::\____\        
@@ -30,22 +30,25 @@ v0.05   2024-05-05   working async download WITHOUT limit asyncio.Semaphore()
 v0.06   2024-05-06   limit parallel downloads
 testing github actions
 v0.07   2024-08-10   checking if site index can be converted to int
+v0.08   2025-03-12   added conncetion retry and send headers in every request
+v0.09   2025-07-27   added SSL verification option, added more info when file already exists 
 """
 """----------------------------------------------------------------------------
         |||||        |||||
         vvvvv CONFIG vvvvv
 -------------------------------------------------------------------------------
 """
-URL = 'https://adoringmargotrobbie.com/galerie/thumbnails.php?album=1802'
+URL = 'https://s-johansson.org/photos/thumbnails.php?album=4364'
 #dest = 'C:\\Users\\silence\\Desktop\\ja\\2014\\Jessica Alba - Samsung Hope For Children Gala in NYC 2014-06-10\\'
 #dest = 'C:\\Users\\silence\\Desktop\\Ana de Armas\\2021\\Ana de Armas - No Time To Die Premiere in London 2021-09-28\\'
-dest = 'Z:\\Downloads\\Margot Robbie - Vanity Fair Oscar Party in Beverly Hills 3_10_2024 _ Picture Pub\\'
-picprefix = 'a'
+dest = 'Z:\\Downloads\\Scarlett Johansson - Eleanor the Great premiere at the Toronto International Film Festival (September 8 2025)\\'
+picprefix = 'site1_'
 nbrOfParallelDL = 5
+SSL = True  # Set to False if you want to verify SSL certificates
 
 """----------------------------------------------------------------------------
         ^^^^^        ^^^^^
-        ||||| CONFIG |||||
+        ||||| CONFIG ||||| 
 -------------------------------------------------------------------------------
 """
 
@@ -57,35 +60,34 @@ import tqdm
 from skimage import io
 import asyncio
 import httpx
+from tenacity import retry, stop_after_attempt, wait_fixed
 
 user_agents = [ 
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:101.0) Gecko/20100101 Firefox/101.0'
-	'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36', 
-	'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/92.0.4515.107 Safari/537.36', 
-	'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/90.0.4430.212 Safari/537.36', 
-	'Mozilla/5.0 (iPhone; CPU iPhone OS 12_2 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148', 
-	'Mozilla/5.0 (Linux; Android 11; SM-G960U) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/89.0.4389.72 Mobile Safari/537.36' 
-    ]
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:101.0) Gecko/20100101 Firefox/101.0',
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36', 
+    'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/92.0.4515.107 Safari/537.36', 
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/90.0.4430.212 Safari/537.36', 
+    'Mozilla/5.0 (iPhone; CPU iPhone OS 12_2 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148', 
+    'Mozilla/5.0 (Linux; Android 11; SM-G960U) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/89.0.4389.72 Mobile Safari/537.36' 
+]
 user_agent = random.choice(user_agents)
 
 headers = {
     'User-Agent': user_agent,
     'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
-    'Accept-Language': 'en-US;q=0.7,en;q=0.3',
-    # 'Accept-Encoding': 'gzip, deflate, br',
+    'Accept-Language': 'en-US,en;q=0.5',
     'Referer': 'https://www.google.com',
     'Connection': 'keep-alive',
     'Cache-Control': 'no-cache',
-    # Requests sorts cookies= alphabetically
-    # 'Cookie': 'cpg143_data=YTo1OntzOjI6IklEIjtzOjMyOiI5ZjFmMDY5ZDcyZDE5OGU1ZDdkNzMyZjYzZGI1NzkwNiI7czoyOiJhbSI7aToxO3M6NDoibGFuZyI7czo2OiJnZXJtYW4iO3M6MzoibGl2IjthOjU6e2k6MDtzOjY6IjIzODUwOSI7aToxO3M6NjoiMjM4NTEwIjtpOjI7czo2OiIyMzczMjEiO2k6MztzOjY6IjIzNzI0MSI7aTo0O3M6NjoiMjM3MjQyIjt9czo1OiJsaXZfYSI7YTo1OntpOjA7aTozODQ7aToxO2k6MjYxMjtpOjI7aToyNzMzO2k6MztpOjI3MzA7aTo0O2k6MjcyNTt9fQ%3D%3D; b865327a7e5d565bb86a7931e457f7d7=a2b37949e1a1d44e0abf2e382611ba9d',
     'Upgrade-Insecure-Requests': '1',
     'Sec-Fetch-Dest': 'document',
     'Sec-Fetch-Mode': 'navigate',
     'Sec-Fetch-Site': 'same-origin',
-    # Requests doesn't support trailers
-    # 'TE': 'trailers',
+    'Sec-Fetch-User': '?1',
+    'TE': 'trailers',
 }
 
+global filelist
 filelist = []
 
 def verify_image(img_file):
@@ -102,64 +104,70 @@ def createdirectory(dest):
     except:
         print("ERROR: Cannot create directory %s" % dest)
 
+@retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
 async def download(dirtyimagepath: str, destination: str, prefix: str):
-    
     strtoremove = '%20'
-    if dirtyimagepath.find(strtoremove) != -1:
+    if strtoremove in dirtyimagepath:
         imagepath = dirtyimagepath.replace(strtoremove, " ")
     else:
-       imagepath = dirtyimagepath
+        imagepath = dirtyimagepath
 
-    filename = imagepath.split('/')
-    filename = filename[len(filename) - 1]
-    fulldestinationname = destination + prefix + filename
-    
-    # wenn das file nicht da oder kaputt ist wirds geladen
+    filename = imagepath.split('/')[-1]
+    fulldestinationname = os.path.join(destination, prefix + filename)
+
     if not os.path.exists(fulldestinationname) or (os.path.exists(fulldestinationname) and not verify_image(fulldestinationname)):
-        #with requests.get(imagepath, stream=True, headers=headers) as r:
-        async with httpx.AsyncClient() as client:
-            async with client.stream('GET', imagepath) as r:
-                if r.status_code == 200:
-                    with open(fulldestinationname, 'wb') as f:
-                        r.raise_for_status()
-                        total = int(r.headers.get('content-length', 0))
-            
-                        # tqdm has many interesting parameters. Feel free to experiment!
-                        tqdm_params = {
-                            'desc': imagepath,
-                            'total': total,
-                            'miniters': 1,
-                            'unit': 'B',
-                            'unit_scale': True,
-                            'unit_divisor': 1024,
-                        }
-                        with tqdm.tqdm(**tqdm_params) as pb:
-                            downloaded = r.num_bytes_downloaded
-                            async for chunk in r.aiter_bytes():
-                                pb.update(r.num_bytes_downloaded - downloaded)
-                                f.write(chunk)
+        async with httpx.AsyncClient(timeout=30, verify=SSL) as client:
+            try:
+                async with client.stream('GET', imagepath, headers=headers) as r:
+                    if r.status_code == 200:
+                        with open(fulldestinationname, 'wb') as f:
+                            r.raise_for_status()
+                            total = int(r.headers.get('content-length', 0))
+                            tqdm_params = {
+                                'desc': filename + " -> " + prefix + filename,
+                                'total': total,
+                                'miniters': 1,
+                                'unit': 'B',
+                                'unit_scale': True,
+                                'unit_divisor': 1024,
+                            }
+                            with tqdm.tqdm(**tqdm_params) as pb:
                                 downloaded = r.num_bytes_downloaded
-                else:
-                    print(imagepath + ' Response:' + str(r.status_code))
+                                async for chunk in r.aiter_bytes():
+                                    pb.update(r.num_bytes_downloaded - downloaded)
+                                    f.write(chunk)
+                                    downloaded = r.num_bytes_downloaded
+                    else:
+                        print(f"{imagepath} Response: {r.status_code}")
+            except httpx.RequestError as exc:
+                print(f"An error occurred while requesting {exc.request.url!r}: {exc}")
+            except httpx.HTTPStatusError as exc:
+                print(f"Error response {exc.response.status_code} while requesting {exc.request.url!r}: {exc}")
 
-def getImageUrlfromSite(siteURL: str):
-    #website = requests.get(siteURL, headers={"User-Agent": "XY"})
-    website = requests.get(siteURL, headers)
-    results = BeautifulSoup(website.content, 'html.parser')
-    images = results.find_all('td', class_='thumbnails')
-    #urlbasepath = urlparse(siteURL).netloc
-    urlbasepath = siteURL.rsplit('/', 1)[0]
-    
-    for image in images:
+    else:
+        print(f"File {fulldestinationname} already exists and is valid, skipping download.")
+
+async def getImageUrlfromSite(siteURL: str):
+    async with httpx.AsyncClient(timeout=30, verify=SSL) as client:
         try:
-            picname = image.find('img')['alt']
-            picurl = image.find('img')['src']
-            picurl = picurl.rsplit('/', 1)
-            picturepath = (urlbasepath + "/" + picurl[0] + "/" + picname)
-            filelist.append(picturepath) if picturepath not in filelist else filelist     # nur hinzufügen, wenn noch nicht drin
-        except:
-            pass
-    print("Searching Images on: " + siteURL + " " + str(len(filelist)) + " files found.")
+            response = await client.get(siteURL, headers=headers)
+            results = BeautifulSoup(response.content, 'html.parser')
+            images = results.find_all('td', class_='thumbnails')
+            urlbasepath = siteURL.rsplit('/', 1)[0]
+            for image in images:
+                try:
+                    img_tag = image.find('img')
+                    if img_tag and 'alt' in img_tag.attrs and 'src' in img_tag.attrs:
+                        picname = img_tag['alt']
+                        picurl = img_tag['src']
+                        picurl = picurl.rsplit('/', 1)
+                        picturepath = (urlbasepath + "/" + picurl[0] + "/" + picname)
+                    if picturepath not in filelist:
+                        filelist.append(picturepath)
+                except Exception:
+                    pass
+        except Exception as e:
+            print(f"Failed to fetch {siteURL}: {e}")
     
 def is_valid_int(s):
     try:
@@ -169,8 +177,7 @@ def is_valid_int(s):
         return False
 
 def countnumberofsites(siteURL):
-    #website = requests.get(URL, headers={"User-Agent": "XY"})#
-    website = requests.get(siteURL, headers)
+    website = requests.get(siteURL, headers=headers, verify=SSL)
 
     if website.status_code == 200:
         soup = BeautifulSoup(website.content, 'html.parser')
@@ -180,45 +187,47 @@ def countnumberofsites(siteURL):
             number = sites.find_all(['a'])
             number = [ele.text.strip() for ele in number]
             data.append([int(ele) for ele in number if is_valid_int(ele)])
-        #print(data)
         try:
             sites = max(data)[0]
         except:
             sites = 0
         return sites
     else:
-        print("ERROR: bad answer from Website: " + website.status_code)
+        print("ERROR: bad answer from Website: " + str(website.status_code))
 
+# Step 1: Count number of sites
+sites = countnumberofsites(URL)
 
+# Step 2: Gather image URLs asynchronously for each site
+async def gather_image_urls():
+    tasks = []
+    if sites:
+        for i in range(1, sites + 1):
+            tasks.append(getImageUrlfromSite(URL + "&page=" + str(i)))
+    else:
+        tasks.append(getImageUrlfromSite(URL + "&page=1"))
+    await asyncio.gather(*tasks)
 
-async def main():
-
-    tasks = [asyncio.ensure_future(safe_download(file, dest, picprefix)) for file in filelist]
-    await asyncio.gather(*tasks, return_exceptions=True)  # await moment all downloads done
-
-sites = countnumberofsites(URL)    
-
-if (sites):
-    for i in range(1, sites+1):
-        getImageUrlfromSite(URL + "&page=" + str(i))
-else:
-    getImageUrlfromSite(URL + "&page=1")
-print("%s files found" % len(filelist))
-
+# Step 3: Create destination directory if it doesn't exist
 createdirectory(dest)
 
-sem = asyncio.Semaphore(nbrOfParallelDL)
-
-async def safe_download(file, dest, picprefix):
+# Step 4: Download images asynchronously with limited parallelism
+async def safe_download(file, dest, picprefix, sem):
     async with sem:  # semaphore limits num of simultaneous downloads
         return await download(file, dest, picprefix)
 
+async def main():
+    await gather_image_urls()
+    print(f"{len(filelist)} files found")
+    sem = asyncio.Semaphore(nbrOfParallelDL)
+    tasks = [asyncio.ensure_future(safe_download(file, dest, picprefix, sem)) for file in filelist]
+    await asyncio.gather(*tasks, return_exceptions=True)  # await moment all downloads done
 
-if __name__ ==  '__main__':
-    loop = asyncio.get_event_loop()
+if __name__ == '__main__':
     try:
-        loop.run_until_complete(main())
-    finally:
-        loop.run_until_complete(loop.shutdown_asyncgens())
-        loop.close()
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print("Download interrupted by user.")
+
+
 
