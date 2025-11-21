@@ -38,11 +38,11 @@ v0.09   2025-07-27   added SSL verification option, added more info when file al
         vvvvv CONFIG vvvvv
 -------------------------------------------------------------------------------
 """
-URL = 'https://s-johansson.org/photos/thumbnails.php?album=4364'
+URL = 'https://monicabarbaro.org/thumbnails.php?album=173'
 #dest = 'C:\\Users\\silence\\Desktop\\ja\\2014\\Jessica Alba - Samsung Hope For Children Gala in NYC 2014-06-10\\'
 #dest = 'C:\\Users\\silence\\Desktop\\Ana de Armas\\2021\\Ana de Armas - No Time To Die Premiere in London 2021-09-28\\'
-dest = 'Z:\\Downloads\\Scarlett Johansson - Eleanor the Great premiere at the Toronto International Film Festival (September 8 2025)\\'
-picprefix = 'site1_'
+dest = 'Z:\\Downloads\\Monica Barbaro - Attends Christian Dior Womenswear Spring_Summer 2026 Fashion Show at Paris Fashion Week in Paris, France. October 01, 2025\\'
+picprefix = 'site_'
 nbrOfParallelDL = 5
 SSL = True  # Set to False if you want to verify SSL certificates
 
@@ -61,6 +61,8 @@ from skimage import io
 import asyncio
 import httpx
 from tenacity import retry, stop_after_attempt, wait_fixed
+import re
+from urllib.parse import urljoin
 
 user_agents = [ 
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:101.0) Gecko/20100101 Firefox/101.0',
@@ -97,12 +99,14 @@ def verify_image(img_file):
     except Exception:
         return False
     
+    
 def createdirectory(dest):
     try:
         if not os.path.exists(dest):
             os.makedirs(dest)
     except:
         print("ERROR: Cannot create directory %s" % dest)
+
 
 @retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
 async def download(dirtyimagepath: str, destination: str, prefix: str):
@@ -146,28 +150,84 @@ async def download(dirtyimagepath: str, destination: str, prefix: str):
 
     else:
         print(f"File {fulldestinationname} already exists and is valid, skipping download.")
+        
 
-async def getImageUrlfromSite(siteURL: str):
+async def getImageUrlfromSite(siteURL: str) -> None:
+    """Sammelt alle Full-Res Bilder auf einer Thumbnail-Seite."""
     async with httpx.AsyncClient(timeout=30, verify=SSL) as client:
         try:
-            response = await client.get(siteURL, headers=headers)
-            results = BeautifulSoup(response.content, 'html.parser')
-            images = results.find_all('td', class_='thumbnails')
-            urlbasepath = siteURL.rsplit('/', 1)[0]
-            for image in images:
-                try:
-                    img_tag = image.find('img')
-                    if img_tag and 'alt' in img_tag.attrs and 'src' in img_tag.attrs:
-                        picname = img_tag['alt']
-                        picurl = img_tag['src']
-                        picurl = picurl.rsplit('/', 1)
-                        picturepath = (urlbasepath + "/" + picurl[0] + "/" + picname)
-                    if picturepath not in filelist:
-                        filelist.append(picturepath)
-                except Exception:
-                    pass
+            r = await client.get(siteURL, headers=headers)
+            r.raise_for_status()
         except Exception as e:
             print(f"Failed to fetch {siteURL}: {e}")
+            return
+
+        soup = BeautifulSoup(r.content, "html.parser")
+
+        for td in soup.find_all("td", class_="thumbnails"):
+            a_tag = td.find("a", href=True)
+            if not a_tag:
+                continue
+            display_url = urljoin(siteURL, a_tag["href"])
+            fullres_url = await extract_fullres_url(display_url, client)
+            if fullres_url and fullres_url not in filelist:
+                filelist.append(fullres_url)
+
+
+async def extract_fullres_url(image_page_url: str, client: httpx.AsyncClient) -> str | None:
+    """Ruft displayimage.php und die fullsize-Seite auf und findet das Fullsize-Bild."""
+
+    # 1) displayimage.php laden
+    try:
+        r = await client.get(image_page_url, headers=headers)
+        r.raise_for_status()
+    except:
+        print(f"Error loading image page {image_page_url}")
+        return None
+
+    soup = BeautifulSoup(r.content, "html.parser")
+
+    # 2) Fullsize-Link finden
+    # meistens: displayimage.php?...&fullsize=1
+    fullsize_link = None
+
+    # a) suche direkten Link
+    for a in soup.find_all("a", href=True):
+        if "fullsize=1" in a["href"]:
+            fullsize_link = urljoin(image_page_url, a["href"])
+            break
+
+    # b) fallback: Coppermine JS Opening
+    if not fullsize_link:
+        # suche JS-Command: window.open('displayimage.php?...&fullsize=1');
+        match = re.search(r"window\.open\('([^']+fullsize=1[^']*)'", r.text)
+        if match:
+            fullsize_link = urljoin(image_page_url, match.group(1))
+
+    if not fullsize_link:
+        print(f"No fullsize link on {image_page_url}")
+        return None
+
+    # 3) Fullsize-Seite laden
+    try:
+        r2 = await client.get(fullsize_link, headers=headers)
+        r2.raise_for_status()
+    except:
+        print(f"Error loading fullsize page {fullsize_link}")
+        return None
+
+    soup2 = BeautifulSoup(r2.content, "html.parser")
+
+    # 4) Jetzt das echte Full-HD Bild finden
+    img = soup2.find("img", id="fullsize_image")
+    if not img:
+        print(f"No fullsize image tag on {fullsize_link}")
+        return None
+
+    final_url = urljoin(fullsize_link, img["src"])
+    return final_url
+
+    
     
 def is_valid_int(s):
     try:
@@ -179,21 +239,25 @@ def is_valid_int(s):
 def countnumberofsites(siteURL):
     website = requests.get(siteURL, headers=headers, verify=SSL)
 
-    if website.status_code == 200:
-        soup = BeautifulSoup(website.content, 'html.parser')
-        counttd = soup.find_all('td', class_='navmenu')
-        data = []
-        for sites in counttd:
-            number = sites.find_all(['a'])
-            number = [ele.text.strip() for ele in number]
-            data.append([int(ele) for ele in number if is_valid_int(ele)])
-        try:
-            sites = max(data)[0]
-        except:
-            sites = 0
-        return sites
+    if website.status_code != 200:
+        print(f"ERROR: bad answer from Website: {website.status_code}")
+        return 0
+
+    soup = BeautifulSoup(website.content, 'html.parser')
+
+    # Alle Links mit ?page=Zahl suchen
+    pages = []
+    for a in soup.find_all("a", href=True):
+        match = re.search(r"page=(\d+)", a["href"])
+        if match:
+            pages.append(int(match.group(1)))
+    if pages:
+        print(f"{max(pages)} pages found")
+        return max(pages)
     else:
-        print("ERROR: bad answer from Website: " + str(website.status_code))
+        print("Only 1 page found")
+        return 1
+
 
 # Step 1: Count number of sites
 sites = countnumberofsites(URL)
