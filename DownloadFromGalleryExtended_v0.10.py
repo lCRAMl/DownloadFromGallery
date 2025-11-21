@@ -20,9 +20,9 @@ Für sehr große Galerien kannst du concurrency in gather_all_fullres_urls reduz
  
 """
 
-URL = 'https://kerirussellweb.com/gallery/thumbnails.php?album=1754'
-dest = 'Z:\\Downloads\\Keri Russell - Netflixs The Diplomat FYC Event - November 8 2025\\'
-picprefix = 'Photoshoot'
+URL = 'https://elizabetholsen.com.br/galeria/thumbnails.php?album=2011'
+dest = 'Z:\\Downloads\\Elizabeth Olsen - UK Premiere of Eternity at The Cinema In The Power Station in London - 11_17_2025\\'
+picprefix = 'fansite_'
 nbrOfParallelDL = 5
 SSL = True  # Set False to ignore cert errors (not recommended)
 do_download = True  # Set False to only collect URLs (debug)
@@ -163,8 +163,10 @@ async def collect_display_pages(thumbnail_page_url: str, client: httpx.AsyncClie
 @retry(stop=stop_after_attempt(5), wait=wait_random(1, 3))
 async def extract_fullres_from_displaypage(display_url: str, client: httpx.AsyncClient) -> str | None:
     """
-    Von displayimage.php -> popup/fullsize page -> final image URL.
-    Erweiterte Fallbacks: <meta property="og:image">, img[srcset]
+    Von displayimage.php -> final image URL.
+    1) Prüft MM_openBrWindow Popups mit fullsize=1
+    2) Lädt die Fullsize-Seite und extrahiert <img>
+    3) Fallbacks bleiben erhalten
     """
     def looks_like_full_image(src: str) -> bool:
         if not src:
@@ -186,56 +188,63 @@ async def extract_fullres_from_displaypage(display_url: str, client: httpx.Async
 
     soup = BeautifulSoup(html, "html.parser")
 
-    # 1) Suche nach <a href="...fullsize=1...">
-    for a in soup.find_all("a", href=True):
-        href = a["href"]
-        if "fullsize=1" in href or "fullsize=true" in href:
-            fullpage = urljoin(display_url, href)
-            img = await _get_img_from_candidate_page(fullpage, client)
+    # ---------------------------
+    # 1) Prüfe MM_openBrWindow(fullsize=1) Links
+    # ---------------------------
+    onclick_tags = soup.find_all("a", onclick=True)
+    for a in onclick_tags:
+        onclick = a["onclick"]
+        m = re.search(r"MM_openBrWindow\(\s*['\"]([^'\"]*fullsize=1[^'\"]*)['\"]", onclick)
+        if m:
+            fullsize_page = urljoin(display_url, m.group(1))
+            # lade Fullsize-Seite und extrahiere Bild
+            img = await _get_img_from_candidate_page(fullsize_page, client)
             if img and looks_like_full_image(img):
                 return img
 
-    # 2) Suche JS open pattern window.open('...fullsize=1...')
-    m = re.search(r"window\.open\(\s*['\"]([^'\"]*fullsize=1[^'\"]*)['\"]", html)
-    if m:
-        fullpage = urljoin(display_url, m.group(1))
-        img = await _get_img_from_candidate_page(fullpage, client)
-        if img and looks_like_full_image(img):
-            return img
-
-    # 3) Prüfe display page selbst nach Fullsize <img>
-    img_tag = soup.find("img", id="fullsize_image") or soup.find("img", attrs={"data-src": True})
-    if img_tag:
-        src = img_tag.get("data-src") or img_tag.get("src")
+    # ---------------------------
+    # 2) Prüfe alle img-Tags auf der Seite
+    # ---------------------------
+    for img_tag in soup.find_all("img"):
+        src = img_tag.get("src") or img_tag.get("data-src")
         if src:
-            final = urljoin(display_url, src.strip())
-            if looks_like_full_image(final):
-                return final
+            full_url = urljoin(display_url, src.strip())
+            if looks_like_full_image(full_url):
+                return full_url
 
-    # 4) Meta og:image fallback
-    meta_og = soup.find("meta", property="og:image")
-    if meta_og and meta_og.get("content"):
-        final = urljoin(display_url, meta_og["content"].strip())
-        if looks_like_full_image(final):
-            return final
-
-    # 5) srcset fallback
+    # ---------------------------
+    # 3) srcset fallback
+    # ---------------------------
     img_srcset = soup.find("img", srcset=True)
     if img_srcset:
         srcset_urls = [url.split()[0] for url in img_srcset["srcset"].split(",")]
         for src in srcset_urls:
-            final = urljoin(display_url, src.strip())
-            if looks_like_full_image(final):
-                return final
+            full_url = urljoin(display_url, src.strip())
+            if looks_like_full_image(full_url):
+                return full_url
 
-    # 6) Letzter Fallback: any albums/ src
+    # ---------------------------
+    # 4) Meta og:image fallback
+    # ---------------------------
+    meta_og = soup.find("meta", property="og:image")
+    if meta_og and meta_og.get("content"):
+        full_url = urljoin(display_url, meta_og["content"].strip())
+        if looks_like_full_image(full_url):
+            return full_url
+
+    # ---------------------------
+    # 5) Letzter Fallback: any albums/ src
+    # ---------------------------
     any_img = soup.find("img", src=re.compile(r"/?albums/"))
     if any_img:
         src = any_img.get("src", "").strip()
-        final = urljoin(display_url, src)
-        if looks_like_full_image(final):
-            return final
+        full_url = urljoin(display_url, src)
+        if looks_like_full_image(full_url):
+            return full_url
+
     return None
+
+
 
 # ---------------------------
 # helper mit retry für candidate page
@@ -243,18 +252,9 @@ async def extract_fullres_from_displaypage(display_url: str, client: httpx.Async
 @retry(stop=stop_after_attempt(5), wait=wait_random(1, 3))
 async def _get_img_from_candidate_page(page_url: str, client: httpx.AsyncClient) -> str | None:
     """
-    Lade candidate page (popup/fullpage) und extrahiere erstes valides img:
-    id="fullsize_image", data-src, srcset, meta og:image, any albums/
+    Lade candidate page (popup/fullpage) und extrahiere erstes valides img.
+    Prüft zuerst alle <img> direkt auf der Seite, danach data-src, srcset, meta og:image, any albums/.
     """
-    try:
-        r2 = await client.get(page_url, headers=headers, timeout=30)
-        r2.raise_for_status()
-        html2 = r2.text
-    except Exception as e:
-        return None
-
-    soup2 = BeautifulSoup(html2, "html.parser")
-
     def looks_like_full_image(src: str) -> bool:
         if not src:
             return False
@@ -265,44 +265,69 @@ async def _get_img_from_candidate_page(page_url: str, client: httpx.AsyncClient)
             return False
         return True
 
-    # Priorität: id=fullsize_image
-    img = soup2.find("img", id="fullsize_image")
-    if img and img.get("src"):
-        src = urljoin(page_url, img["src"].strip())
-        if looks_like_full_image(src):
-            return src
+    try:
+        r = await client.get(page_url, headers=headers, timeout=30)
+        r.raise_for_status()
+        html = r.text
+    except Exception as e:
+        print(f"[candidate] failed to load {page_url}: {e}")
+        return None
 
-    # next: data-src
-    img = soup2.find("img", attrs={"data-src": True})
+    soup = BeautifulSoup(html, "html.parser")
+
+    # ---------------------------
+    # 1) Prüfe alle img-Tags auf der Seite
+    # ---------------------------
+    for img_tag in soup.find_all("img"):
+        src = img_tag.get("src") or img_tag.get("data-src")
+        if src:
+            full_url = urljoin(page_url, src.strip())
+            if looks_like_full_image(full_url):
+                return full_url
+
+    # ---------------------------
+    # 2) data-src explizit prüfen
+    # ---------------------------
+    img = soup.find("img", attrs={"data-src": True})
     if img:
-        src = urljoin(page_url, img["data-src"].strip())
-        if looks_like_full_image(src):
-            return src
+        src = img.get("data-src")
+        if src:
+            full_url = urljoin(page_url, src.strip())
+            if looks_like_full_image(full_url):
+                return full_url
 
-    # next: srcset
-    img_srcset = soup2.find("img", srcset=True)
+    # ---------------------------
+    # 3) srcset fallback
+    # ---------------------------
+    img_srcset = soup.find("img", srcset=True)
     if img_srcset:
         srcset_urls = [url.split()[0] for url in img_srcset["srcset"].split(",")]
         for src in srcset_urls:
-            final = urljoin(page_url, src.strip())
-            if looks_like_full_image(final):
-                return final
+            full_url = urljoin(page_url, src.strip())
+            if looks_like_full_image(full_url):
+                return full_url
 
-    # meta og:image
-    meta_og = soup2.find("meta", property="og:image")
+    # ---------------------------
+    # 4) Meta og:image fallback
+    # ---------------------------
+    meta_og = soup.find("meta", property="og:image")
     if meta_og and meta_og.get("content"):
-        final = urljoin(page_url, meta_og["content"].strip())
-        if looks_like_full_image(final):
-            return final
+        full_url = urljoin(page_url, meta_og["content"].strip())
+        if looks_like_full_image(full_url):
+            return full_url
 
-    # any albums/ src
-    img = soup2.find("img", src=re.compile(r"/?albums/"))
-    if img and img.get("src"):
-        final = urljoin(page_url, img["src"].strip())
-        if looks_like_full_image(final):
-            return final
+    # ---------------------------
+    # 5) Letzter Fallback: any albums/ src
+    # ---------------------------
+    any_img = soup.find("img", src=re.compile(r"/?albums/"))
+    if any_img:
+        src = any_img.get("src", "").strip()
+        full_url = urljoin(page_url, src)
+        if looks_like_full_image(full_url):
+            return full_url
 
     return None
+
 
 # ---------------------------
 # downloader (with retry)
@@ -352,20 +377,32 @@ async def gather_all_display_pages(base_url: str, pages: int = 1):
 async def gather_all_fullres_urls(concurrency: int = 10):
     sem = asyncio.Semaphore(concurrency)
     async with httpx.AsyncClient(timeout=30, verify=SSL) as client:
+        pbar = tqdm.tqdm(total=len(displaypage_list),
+                         desc="Resolving URLs",
+                         unit="page",
+                         ncols=120,
+                         leave=True)  # leave=True hält die Bar am Ende sichtbar
 
         @retry(stop=stop_after_attempt(5), wait=wait_fixed(1))
         async def worker(display_url):
             async with sem:
-                # kleines Delay zwischen Requests
                 await asyncio.sleep(random.uniform(0.3, 1.0))
                 full = await extract_fullres_from_displaypage(display_url, client)
                 if full and full not in filelist:
                     filelist.append(full)
+
+                # Letzten Bildnamen in der tqdm Bar anzeigen
+                filename = unquote(full.split("/")[-1]) if full else "None"
+                pbar.set_postfix(file=filename)
+
                 if not full:
                     print(f"[WARNING] No fullsize found (retry may help): {display_url}")
+                
+                pbar.update(1)
 
         tasks = [worker(d) for d in displaypage_list]
         await asyncio.gather(*tasks)
+        pbar.close()
 
 async def download_all_images(destination: str, prefix: str, parallel: int = 5):
     sem = asyncio.Semaphore(parallel)
