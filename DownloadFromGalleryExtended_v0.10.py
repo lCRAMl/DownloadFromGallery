@@ -20,8 +20,8 @@ Für sehr große Galerien kannst du concurrency in gather_all_fullres_urls reduz
  
 """
 
-URL = 'https://elizabetholsen.com.br/galeria/thumbnails.php?album=2011'
-dest = 'Z:\\Downloads\\Elizabeth Olsen - UK Premiere of Eternity at The Cinema In The Power Station in London - 11_17_2025\\'
+URL = 'https://www.sarah-michelle-gellar.org/photos/thumbnails.php?album=1889'
+dest = 'Z:\\Downloads\\Sarah Michelle Gellar attends the premiere of Columbia Pictures I Know What You Did Last Summer at The United Theatre on Broadway - Jul 14th 2025\\'
 picprefix = 'fansite_'
 nbrOfParallelDL = 5
 SSL = True  # Set False to ignore cert errors (not recommended)
@@ -118,7 +118,8 @@ def countnumberofsites(siteURL: str) -> int:
     soup = BeautifulSoup(r.content, "html.parser")
     pages = []
     for a in soup.find_all("a", href=True):
-        m = re.search(r"[?&]page=(\d+)", a["href"])
+        href = str(a.get("href", ""))
+        m = re.search(r"[?&]page=(\d+)", href)
         if m:
             try:
                 pages.append(int(m.group(1)))
@@ -172,7 +173,7 @@ async def extract_fullres_from_displaypage(display_url: str, client: httpx.Async
         if not src:
             return False
         lower = src.lower()
-        if "thumb" in lower or "normal" in lower or "placeholder" in lower or "missing" in lower:
+        if any(x in lower for x in ["thumb", "normal", "placeholder", "missing", "avatar"]):
             return False
         if not lower.endswith(('.jpg', '.jpeg', '.png', '.webp')):
             return False
@@ -241,7 +242,7 @@ async def extract_fullres_from_displaypage(display_url: str, client: httpx.Async
         full_url = urljoin(display_url, src)
         if looks_like_full_image(full_url):
             return full_url
-
+        
     return None
 
 
@@ -386,7 +387,7 @@ async def gather_all_fullres_urls(concurrency: int = 10):
         @retry(stop=stop_after_attempt(5), wait=wait_fixed(1))
         async def worker(display_url):
             async with sem:
-                await asyncio.sleep(random.uniform(0.3, 1.0))
+                #await asyncio.sleep(random.uniform(0.3, 1.0))
                 full = await extract_fullres_from_displaypage(display_url, client)
                 if full and full not in filelist:
                     filelist.append(full)
