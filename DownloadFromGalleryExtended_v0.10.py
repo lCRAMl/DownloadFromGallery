@@ -20,8 +20,8 @@ Für sehr große Galerien kannst du concurrency in gather_all_fullres_urls reduz
  
 """
 
-URL = 'https://www.sarah-michelle-gellar.org/photos/thumbnails.php?album=1889'
-dest = 'Z:\\Downloads\\Sarah Michelle Gellar attends the premiere of Columbia Pictures I Know What You Did Last Summer at The United Theatre on Broadway - Jul 14th 2025\\'
+URL = 'https://www.reese-witherspoon.org/gallery/thumbnails.php?album=1378'
+dest = 'Z:\\Downloads\\Reese Witherspoon - 2014 Vanity Fair Oscars Party in West Hollywood 03_02_14\\'
 picprefix = 'fansite_'
 nbrOfParallelDL = 5
 SSL = True  # Set False to ignore cert errors (not recommended)
@@ -55,7 +55,7 @@ headers = {
     'User-Agent': user_agent,
     'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
     'Accept-Language': 'en-US,en;q=0.5',
-    'Referer': 'https://www.google.com',
+    'Referer': URL,
     'Connection': 'keep-alive',
     'Cache-Control': 'no-cache',
     'Upgrade-Insecure-Requests': '1',
@@ -159,25 +159,46 @@ async def collect_display_pages(thumbnail_page_url: str, client: httpx.AsyncClie
             displaypage_list.append(full)
 
 # ---------------------------
-# extract fullres von display page
+# extract fullres von display page (erweitert, Coppermine & Varianten)
 # ---------------------------
 @retry(stop=stop_after_attempt(5), wait=wait_random(1, 3))
 async def extract_fullres_from_displaypage(display_url: str, client: httpx.AsyncClient) -> str | None:
     """
-    Von displayimage.php -> final image URL.
-    1) Prüft MM_openBrWindow Popups mit fullsize=1
-    2) Lädt die Fullsize-Seite und extrahiert <img>
-    3) Fallbacks bleiben erhalten
+    Versucht mehrere Strategien, um das beste Bild zu finden.
+    Fallback: Wenn kein Fullsize gefunden, wird Thumbnail/Medium genutzt.
     """
     def looks_like_full_image(src: str) -> bool:
         if not src:
             return False
         lower = src.lower()
-        if any(x in lower for x in ["thumb", "normal", "placeholder", "missing", "avatar"]):
+        # Ausschließen klarer Thumbs/Platzhalter
+        if any(x in lower for x in ("placeholder", "missing", "avatar")):
             return False
         if not lower.endswith(('.jpg', '.jpeg', '.png', '.webp')):
             return False
         return True
+
+    async def head_ok(url: str) -> bool:
+        try:
+            r = await client.head(url, headers=headers, timeout=10, follow_redirects=True)
+            if r.status_code == 200 and r.headers.get("content-type", "").startswith("image"):
+                cl = int(r.headers.get("content-length", 0) or 0)
+                if cl < 512:
+                    return False
+                return True
+            return False
+        except Exception:
+            # HEAD kann blockiert sein, GET-Fallback
+            try:
+                r = await client.get(url, headers=headers, timeout=10, follow_redirects=True)
+                if r.status_code == 200 and r.headers.get("content-type", "").startswith("image"):
+                    cl = int(r.headers.get("content-length", 0) or 0)
+                    if cl < 512:
+                        return False
+                    return True
+            except Exception:
+                return False
+        return False
 
     try:
         r = await client.get(display_url, headers=headers, timeout=30)
@@ -190,60 +211,139 @@ async def extract_fullres_from_displaypage(display_url: str, client: httpx.Async
     soup = BeautifulSoup(html, "html.parser")
 
     # ---------------------------
-    # 1) Prüfe MM_openBrWindow(fullsize=1) Links
+    # Helper: Kandidaten prüfen
     # ---------------------------
-    onclick_tags = soup.find_all("a", onclick=True)
-    for a in onclick_tags:
-        onclick = a["onclick"]
+    async def check_img_candidate(src: str, base_url: str = "") -> str | None:
+        """
+        Prüft, ob ein Bild-URL-Kandidat existiert und vermutlich ein echtes Bild ist.
+        Akzeptiert auch Medium/Thumbnail als Fallback, solange es kein winziges Placeholder ist.
+        """
+        if not src:
+            return None
+
+        # absoluten URL erstellen
+        if base_url:
+            src = urljoin(base_url, src.strip())
+        else:
+            src = src.strip()
+
+        lower = src.lower()
+
+        # sofort ausschließen, wenn eindeutiger Platzhalter
+        if any(x in lower for x in ("placeholder", "missing", "avatar")):
+            return None
+        if not lower.endswith(('.jpg', '.jpeg', '.png', '.webp')):
+            return None
+
+        # HEAD GET check
+        try:
+            async with httpx.AsyncClient() as client:
+                r = await client.head(src, timeout=10, follow_redirects=True)
+                if r.status_code == 200 and r.headers.get("content-type", "").startswith("image"):
+                    cl = int(r.headers.get("content-length", 0) or 0)
+                    if cl < 512:  # sehr kleines Bild → wahrscheinlich Platzhalter
+                        return None
+                    return src
+                # Fallback GET, falls HEAD blockiert
+                r = await client.get(src, timeout=10, follow_redirects=True)
+                if r.status_code == 200 and r.headers.get("content-type", "").startswith("image"):
+                    cl = int(r.headers.get("content-length", 0) or 0)
+                    if cl < 512:
+                        return None
+                    return src
+        except Exception:
+            return None
+
+        return None
+
+    # ---------------------------
+    # 1) Fullsize Links / Popups
+    # ---------------------------
+    for a in soup.find_all("a", onclick=True):
+        onclick = a.get("onclick", "")
         m = re.search(r"MM_openBrWindow\(\s*['\"]([^'\"]*fullsize=1[^'\"]*)['\"]", onclick)
+        if not m:
+            m = re.search(r"window\.open\(\s*['\"]([^'\"]*fullsize=1[^'\"]*)['\"]", onclick)
         if m:
             fullsize_page = urljoin(display_url, m.group(1))
-            # lade Fullsize-Seite und extrahiere Bild
             img = await _get_img_from_candidate_page(fullsize_page, client)
-            if img and looks_like_full_image(img):
+            if img:
+                return img
+
+    # anchor href mit fullsize param
+    for a in soup.find_all("a", href=True):
+        href = a.get("href", "")
+        if any(x in href for x in ("fullsize=1", "view=popup", "size=original")):
+            candidate = urljoin(display_url, href)
+            img = await _get_img_from_candidate_page(candidate, client)
+            if img:
                 return img
 
     # ---------------------------
-    # 2) Prüfe alle img-Tags auf der Seite
+    # 2) id="fullsize_image"
     # ---------------------------
-    for img_tag in soup.find_all("img"):
-        src = img_tag.get("src") or img_tag.get("data-src")
-        if src:
-            full_url = urljoin(display_url, src.strip())
-            if looks_like_full_image(full_url):
-                return full_url
+    img = soup.find("img", id="fullsize_image")
+    if img:
+        src = img.get("src") or img.get("data-src")
+        candidate = await check_img_candidate(src)
+        if candidate:
+            return candidate
 
     # ---------------------------
-    # 3) srcset fallback
+    # 3) class="image"
+    # ---------------------------
+    img = soup.find("img", class_=lambda c: c and "image" in c.split())
+    if img:
+        src = img.get("src") or img.get("data-src")
+        candidate = await check_img_candidate(src)
+        if candidate:
+            return candidate
+
+    # ---------------------------
+    # 4) srcset / meta og:image
     # ---------------------------
     img_srcset = soup.find("img", srcset=True)
     if img_srcset:
-        srcset_urls = [url.split()[0] for url in img_srcset["srcset"].split(",")]
-        for src in srcset_urls:
-            full_url = urljoin(display_url, src.strip())
-            if looks_like_full_image(full_url):
-                return full_url
+        srcset_urls = [u.split()[0] for u in img_srcset.get("srcset", "").split(",")]
+        for s in srcset_urls:
+            candidate = await check_img_candidate(s)
+            if candidate:
+                return candidate
 
-    # ---------------------------
-    # 4) Meta og:image fallback
-    # ---------------------------
     meta_og = soup.find("meta", property="og:image")
     if meta_og and meta_og.get("content"):
-        full_url = urljoin(display_url, meta_og["content"].strip())
-        if looks_like_full_image(full_url):
-            return full_url
+        candidate = await check_img_candidate(meta_og["content"])
+        if candidate:
+            return candidate
 
     # ---------------------------
-    # 5) Letzter Fallback: any albums/ src
+    # 5) any /albums/ image conservative
     # ---------------------------
     any_img = soup.find("img", src=re.compile(r"/?albums/"))
     if any_img:
-        src = any_img.get("src", "").strip()
-        full_url = urljoin(display_url, src)
-        if looks_like_full_image(full_url):
-            return full_url
-        
+        src = any_img.get("src") or any_img.get("data-src")
+        candidate = await check_img_candidate(urljoin(display_url, src))
+        if candidate:
+            return candidate
+
+    # ---------------------------
+    # 6) Letzter Fallback: größtes <img> auf Seite
+    # ---------------------------
+    imgs = []
+    for tag in soup.find_all("img"):
+        src = tag.get("src") or tag.get("data-src")
+        if src:
+            imgs.append(src)
+    if imgs:
+        # Wähle die erste akzeptable URL als Fallback
+        for src in imgs:
+            candidate = await check_img_candidate(src)
+            if candidate:
+                return candidate
+
+    # nichts gefunden
     return None
+
 
 
 
